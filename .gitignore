@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+*.log
+
+# 環境変数
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# その他
+*.pdf
+uploads/
+
+# テスト出力
+backend/tests/extracted_output*.txt
+backend/tests/scanned_test.pdf
+
+# ログ
+backend/logs/
+
+# Claude Code
+.claude/
