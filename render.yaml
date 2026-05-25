@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: reading-support-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: PORT
+        value: 10000
