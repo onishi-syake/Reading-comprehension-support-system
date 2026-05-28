@@ -49,7 +49,7 @@ class AnswerConceptData(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"message": "読解支援システムAPI", "allowed_origins": ALLOWED_ORIGINS}
+    return {"message": "読解支援システムAPI"}
 
 @app.post("/upload-file")
 async def upload_file(file: UploadFile = File(...)):
