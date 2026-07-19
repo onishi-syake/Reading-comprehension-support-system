@@ -1,4 +1,4 @@
-from openai import OpenAI
+from openai import AsyncOpenAI
 from typing import List, Dict
 import os
 
@@ -6,7 +6,7 @@ class PrerequisiteGenerator:
     """前提知識生成システム"""
 
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = "gpt-5.2"
 
     async def generate_text(
@@ -76,7 +76,7 @@ class PrerequisiteGenerator:
 前提知識文を生成してください。
 """
 
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "あなたは教育的な説明が得意な技術ライターです。"},

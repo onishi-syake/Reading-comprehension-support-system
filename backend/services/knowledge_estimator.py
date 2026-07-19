@@ -1,4 +1,4 @@
-from openai import OpenAI
+from openai import AsyncOpenAI
 from typing import List, Dict, Optional
 import os
 import json
@@ -13,7 +13,7 @@ class KnowledgeEstimator:
     MAX_RETRIES = 3
 
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = "gpt-5.2"
         self.normalizer = ConceptNormalizer()
 
@@ -61,7 +61,7 @@ class KnowledgeEstimator:
 
         raise ValueError(f"JSONの抽出に失敗しました: {text[:200]}")
 
-    def _call_llm_with_retry(self, messages: list, temperature: float = 0, max_tokens: int = None) -> str:
+    async def _call_llm_with_retry(self, messages: list, temperature: float = 0, max_tokens: int = None) -> str:
         """
         LLMを呼び出し、失敗時にリトライする
 
@@ -84,7 +84,7 @@ class KnowledgeEstimator:
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
-                response = self.client.chat.completions.create(**kwargs)
+                response = await self.client.chat.completions.create(**kwargs)
                 return response.choices[0].message.content.strip()
             except Exception as e:
                 last_error = e
@@ -92,7 +92,7 @@ class KnowledgeEstimator:
 
         raise Exception(f"LLM呼び出しが{self.MAX_RETRIES}回失敗しました: {last_error}")
 
-    def _call_llm_json_with_retry(self, messages: list, temperature: float = 0) -> dict | list:
+    async def _call_llm_json_with_retry(self, messages: list, temperature: float = 0) -> dict | list:
         """
         LLMを呼び出してJSON応答を取得する。パース失敗時もリトライする
 
@@ -106,7 +106,7 @@ class KnowledgeEstimator:
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
-                response_text = self._call_llm_with_retry(messages, temperature)
+                response_text = await self._call_llm_with_retry(messages, temperature)
                 return self._extract_json(response_text)
             except ValueError as e:
                 last_error = e
@@ -131,7 +131,7 @@ class KnowledgeEstimator:
 
 「はい」または「いいえ」のみで回答してください。
 """
-            answer = self._call_llm_with_retry(
+            answer = await self._call_llm_with_retry(
                 [
                     {"role": "system", "content": "あなたは教育専門家です。"},
                     {"role": "user", "content": prompt}
@@ -182,7 +182,7 @@ class KnowledgeEstimator:
 不正な例: {{"機械学習とは、データから学習する方法です。": "", "ニューラルネットワーク（NN）": "", "モジュール": "システムを構成する機能単位（例：抽出・推定・生成）"}}
 """
 
-            concepts_dict = self._call_llm_json_with_retry([
+            concepts_dict = await self._call_llm_json_with_retry([
                 {"role": "system", "content": "あなたは情報科学分野の専門家です。"},
                 {"role": "user", "content": prompt}
             ])
@@ -245,7 +245,7 @@ class KnowledgeEstimator:
 不正な例: {{"確率論の基礎": "", "統計学（Statistics）": ""}}
 """
 
-            prerequisites_dict = self._call_llm_json_with_retry([
+            prerequisites_dict = await self._call_llm_json_with_retry([
                 {"role": "system", "content": "あなたは教育専門家です。"},
                 {"role": "user", "content": prompt}
             ])
@@ -273,7 +273,8 @@ class KnowledgeEstimator:
         knowledge_graph: Dict,
         user_knowledge: List[Dict],
         concept_supplements: Dict[str, str] = None,
-        fundamental_concepts: list = None
+        fundamental_concepts: list = None,
+        checked_concepts: set = None
     ) -> Optional[Dict]:
         """
         次に確認すべき知識質問を生成
@@ -285,12 +286,14 @@ class KnowledgeEstimator:
             user_knowledge: ユーザーの回答履歴
             concept_supplements: 前提概念の補足情報
             fundamental_concepts: 基礎概念として判定済みの概念セット
+            checked_concepts: 基礎概念判定を済ませた概念の集合（重複判定を避けるためのキャッシュ）
 
         Returns:
             次の質問（conceptとdescriptionを含む辞書）、または終了時はNone
         """
         concept_supplements = concept_supplements or {}
         fundamental_concepts = fundamental_concepts if fundamental_concepts is not None else []
+        checked_concepts = checked_concepts if checked_concepts is not None else set()
 
         # まだ質問していない概念を探す（正規化して比較）
         asked_concepts = set()
@@ -301,29 +304,32 @@ class KnowledgeEstimator:
         # 現在の概念（主要概念）から未質問のものを探す（基礎判定なし）
         for concept, supplement in current_concepts.items():
             if self.normalizer.normalize_text(concept) not in asked_concepts:
-                desc = f"「{concept}」という概念を理解していますか？"
+                desc = f"「{concept}」という概念を自分の言葉で説明できますか？"
                 if supplement:
-                    desc = f"「{concept}」（{supplement}）という概念を理解していますか？"
+                    desc = f"「{concept}」（{supplement}）という概念を自分の言葉で説明できますか？"
                 return {"concept": concept, "description": desc}
 
         # 知識グラフ内の前提概念から未質問のものを探す（基礎判定あり）
-        for parent, children in knowledge_graph.items():
-            for child in children:
+        # 反復中の変化に備えてスナップショットを取る
+        for parent, children in list(knowledge_graph.items()):
+            for child in list(children):
                 normalized_child = self.normalizer.normalize_text(child)
                 if normalized_child in asked_concepts:
                     continue
+
+                # 基礎概念判定：未判定の場合のみLLMを呼ぶ（通常はバックグラウンドで判定済み）
+                if normalized_child not in checked_concepts:
+                    checked_concepts.add(normalized_child)
+                    if await self.is_fundamental(child):
+                        fundamental_concepts.append(normalized_child)
+
                 if normalized_child in fundamental_concepts:
                     continue
 
-                # 基礎概念か判定
-                if await self.is_fundamental(child):
-                    fundamental_concepts.append(normalized_child)
-                    continue
-
                 supplement = concept_supplements.get(child, "")
-                desc = f"「{child}」という概念を理解していますか？（「{parent}」を理解するために必要）"
+                desc = f"「{child}」という概念を自分の言葉で説明できますか？（「{parent}」を理解するために必要）"
                 if supplement:
-                    desc = f"「{child}」（{supplement}）という概念を理解していますか？（「{parent}」を理解するために必要）"
+                    desc = f"「{child}」（{supplement}）という概念を自分の言葉で説明できますか？（「{parent}」を理解するために必要）"
                 return {"concept": child, "description": desc}
 
         # すべて質問済みまたは基礎概念

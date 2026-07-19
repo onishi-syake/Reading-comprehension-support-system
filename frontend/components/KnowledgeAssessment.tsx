@@ -93,7 +93,7 @@ export default function KnowledgeAssessment({
                   : 'bg-green-500 text-white hover:bg-green-600'
               }`}
             >
-              はい、理解しています
+              はい、自分の言葉で説明できます
             </button>
             <button
               onClick={() => handleAnswer(false)}
@@ -104,7 +104,7 @@ export default function KnowledgeAssessment({
                   : 'bg-red-500 text-white hover:bg-red-600'
               }`}
             >
-              いいえ、分かりません
+              いいえ、説明できません
             </button>
           </div>
         </div>

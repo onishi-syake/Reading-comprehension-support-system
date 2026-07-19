@@ -33,6 +33,10 @@ export interface PrerequisiteTextResponse {
   prerequisite_text: string;
 }
 
+export interface ChatResponse {
+  reply: string;
+}
+
 // ファイルアップロード（PDF / Word）
 export const uploadFile = async (file: File): Promise<SessionResponse> => {
   const formData = new FormData();
@@ -76,6 +80,18 @@ export const generatePrerequisiteText = async (
   sessionId: string
 ): Promise<PrerequisiteTextResponse> => {
   const response = await api.post('/generate-prerequisite-text', { session_id: sessionId });
+  return response.data;
+};
+
+// チャットメッセージ送信
+export const sendChatMessage = async (
+  sessionId: string,
+  message: string
+): Promise<ChatResponse> => {
+  const response = await api.post('/chat', {
+    session_id: sessionId,
+    message,
+  });
   return response.data;
 };
 

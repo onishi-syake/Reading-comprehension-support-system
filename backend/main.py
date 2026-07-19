@@ -4,7 +4,9 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional
 import os
 import time
+import asyncio
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 from services.pdf_processor import DocumentProcessor
 from services.knowledge_estimator import KnowledgeEstimator
@@ -47,6 +49,10 @@ class AnswerConceptData(BaseModel):
     concept: str
     understands: bool
 
+class ChatData(BaseModel):
+    session_id: str
+    message: str
+
 @app.get("/")
 async def root():
     return {"message": "読解支援システムAPI"}
@@ -84,7 +90,9 @@ async def upload_file(file: UploadFile = File(...)):
             "knowledge_graph": {},
             "user_knowledge": [],
             "concept_depth": {},
-            "fundamental_concepts": []
+            "fundamental_concepts": [],
+            "checked_concepts": set(),
+            "pending_tasks": []
         }
 
         message = "ファイルアップロード成功"
@@ -121,6 +129,50 @@ async def extract_concepts(data: SessionData):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"概念抽出エラー: {str(e)}")
 
+async def generate_prerequisites_in_background(session_id: str, concept: str):
+    """理解されなかった概念の前提概念をバックグラウンドで生成する"""
+    session = sessions.get(session_id)
+    if not session:
+        return
+    try:
+        estimator = KnowledgeEstimator()
+        prerequisites = await estimator.update_knowledge_graph(
+            concept,
+            session["knowledge_graph"],
+            session["pdf_content"],
+            session["user_knowledge"],
+            session["concept_supplements"],
+            session["concept_depth"]
+        )
+        kg_logger.log_graph_update(
+            session_id,
+            concept,
+            prerequisites if prerequisites else [],
+            action="add_prerequisites"
+        )
+
+        # 生成した前提概念の基礎概念判定も先にバックグラウンドで済ませておく
+        # （質問取得時のLLM待ちをなくすため）
+        checked = session.setdefault("checked_concepts", set())
+        for prereq in prerequisites:
+            normalized = estimator.normalizer.normalize_text(prereq)
+            if normalized in checked:
+                continue
+            checked.add(normalized)
+            if await estimator.is_fundamental(prereq):
+                session["fundamental_concepts"].append(normalized)
+    except Exception as e:
+        print(f"前提概念生成エラー (concept={concept}): {e}")
+
+
+async def wait_for_pending_prerequisites(session: dict):
+    """進行中の前提概念生成がすべて完了するまで待機する"""
+    tasks = session.get("pending_tasks", [])
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+        session["pending_tasks"] = []
+
+
 @app.post("/get-next-question")
 async def get_next_question(data: SessionData):
     """次の知識確認質問を取得"""
@@ -130,13 +182,29 @@ async def get_next_question(data: SessionData):
             raise HTTPException(status_code=404, detail="セッションが見つかりません")
 
         estimator = KnowledgeEstimator()
+
+        # まず現時点で回答可能な質問を探す（バックグラウンド生成を待たない）。
+        # 主要概念や、生成済みの前提概念が残っていれば即座に返せる。
         question = await estimator.get_next_prerequisite_question(
             session["current_concepts"],
             session["knowledge_graph"],
             session["user_knowledge"],
             session["concept_supplements"],
-            session["fundamental_concepts"]
+            session["fundamental_concepts"],
+            session.setdefault("checked_concepts", set())
         )
+
+        # 回答可能な質問が無く、かつ前提概念生成が進行中の場合のみ、
+        # その完了を待ってから再度探索する
+        while question is None and session.get("pending_tasks"):
+            await wait_for_pending_prerequisites(session)
+            question = await estimator.get_next_prerequisite_question(
+                session["current_concepts"],
+                session["knowledge_graph"],
+                session["user_knowledge"],
+                session["concept_supplements"],
+                session["fundamental_concepts"]
+            )
 
         if question is None:
             return {"finished": True, "question": None}
@@ -160,25 +228,13 @@ async def answer_concept(data: AnswerConceptData):
             "understands": data.understands
         })
 
-        # 理解していない場合、さらに前提知識を探索
-        estimator = KnowledgeEstimator()
+        # 理解していない場合、前提知識の探索をバックグラウンドで開始し、
+        # 生成の完了を待たずに即座にレスポンスを返す
         if not data.understands:
-            prerequisites = await estimator.update_knowledge_graph(
-                data.concept,
-                session["knowledge_graph"],
-                session["pdf_content"],
-                session["user_knowledge"],
-                session["concept_supplements"],
-                session["concept_depth"]
+            task = asyncio.create_task(
+                generate_prerequisites_in_background(data.session_id, data.concept)
             )
-
-            # 知識グラフの更新をログに記録
-            kg_logger.log_graph_update(
-                data.session_id,
-                data.concept,
-                prerequisites if prerequisites else [],
-                action="add_prerequisites"
-            )
+            session.setdefault("pending_tasks", []).append(task)
 
         return {"message": "回答を記録しました"}
 
@@ -212,10 +268,75 @@ async def generate_prerequisite_text(data: SessionData):
         )
         print(f"Knowledge graph saved to: {log_filepath}")
 
+        # セッションに前提知識文を保存（チャットボットで使用）
+        session["prerequisite_text"] = prerequisite_text
+        session["chat_history"] = []
+
         return {"prerequisite_text": prerequisite_text}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"前提文生成エラー: {str(e)}")
+
+CHAT_MAX_HISTORY = 20  # 直近10往復分
+
+@app.post("/chat")
+async def chat(data: ChatData):
+    """前提知識文に関するチャット対話"""
+    try:
+        session = sessions.get(data.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="セッションが見つかりません")
+
+        prerequisite_text = session.get("prerequisite_text", "")
+        if not prerequisite_text:
+            raise HTTPException(status_code=400, detail="前提知識文がまだ生成されていません")
+
+        # 知識グラフから理解していない概念を取得
+        unknown_concepts = [
+            entry["concept"] for entry in session.get("user_knowledge", [])
+            if not entry["understands"]
+        ]
+
+        system_prompt = (
+            "あなたは情報科学論文の読解を支援するアシスタントです。\n"
+            "以下の前提知識文と論文本文を参考にして、ユーザーの質問にわかりやすく回答してください。\n"
+            "回答は簡潔にしつつ、必要に応じて具体例を交えて説明してください。\n"
+            "前提知識文や論文の範囲を大きく超える質問には、範囲外であることを伝えてください。\n\n"
+            f"【前提知識文】\n{prerequisite_text}\n\n"
+            f"【ユーザーが理解していない概念】\n{', '.join(unknown_concepts) if unknown_concepts else 'なし'}\n\n"
+            f"【論文本文（参考）】\n{session['pdf_content'][:3000]}"
+        )
+
+        # 会話履歴を構築
+        messages = [{"role": "system", "content": system_prompt}]
+        for entry in session.get("chat_history", [])[-CHAT_MAX_HISTORY:]:
+            messages.append(entry)
+        messages.append({"role": "user", "content": data.message})
+
+        # LLM呼び出し
+        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = await client.chat.completions.create(
+            model="gpt-5.2",
+            messages=messages,
+            temperature=0.7,
+            max_completion_tokens=1000,
+        )
+        reply = response.choices[0].message.content.strip()
+
+        # 会話履歴を保存
+        session["chat_history"].append({"role": "user", "content": data.message})
+        session["chat_history"].append({"role": "assistant", "content": reply})
+
+        # 履歴が上限を超えたら古いものを削除
+        if len(session["chat_history"]) > CHAT_MAX_HISTORY:
+            session["chat_history"] = session["chat_history"][-CHAT_MAX_HISTORY:]
+
+        return {"reply": reply}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"チャットエラー: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

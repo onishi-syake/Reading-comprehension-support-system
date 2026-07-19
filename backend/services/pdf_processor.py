@@ -134,7 +134,7 @@ class DocumentProcessor:
 
     def clean_text(self, text: str) -> str:
         """
-        抽出したテキストをクリーニング
+        抽出したテキストをクリーニング（改行・空白を全て削除）
 
         Args:
             text: 元のテキスト
@@ -144,16 +144,12 @@ class DocumentProcessor:
         """
         import re
 
-        # 改行の正規化
-        text = text.replace('\r\n', '\n')
+        # 改行を全て削除
+        text = text.replace('\r\n', '')
+        text = text.replace('\n', '')
+        text = text.replace('\r', '')
 
-        # 単一の改行を削除（段落途中の改行を結合）
-        text = re.sub(r'(?<!\n)\n(?!\n)', '', text)
+        # 空白を全て削除
+        text = re.sub(r'[\s\u3000]+', '', text)
 
-        # 複数の改行を1つに
-        text = re.sub(r'\n{2,}', '\n', text)
-
-        # 複数の空白を1つに
-        text = re.sub(r' +', ' ', text)
-
-        return text.strip()
+        return text

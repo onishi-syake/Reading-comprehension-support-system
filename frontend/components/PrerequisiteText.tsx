@@ -1,7 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkCjkFriendly from 'remark-cjk-friendly';
 import { generatePrerequisiteText } from '@/lib/api';
+import ChatBot from './ChatBot';
 
 interface PrerequisiteTextProps {
   sessionId: string;
@@ -67,12 +70,31 @@ export default function PrerequisiteText({
       ) : (
         <>
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 max-h-96 overflow-y-auto">
-            <div className="prose prose-sm max-w-none">
-              {prerequisiteText.split('\n').map((paragraph, index) => (
-                <p key={index} className="mb-3 text-gray-800 leading-relaxed">
-                  {paragraph}
-                </p>
-              ))}
+            <div className="text-gray-800 leading-relaxed text-base">
+              <ReactMarkdown
+                remarkPlugins={[remarkCjkFriendly]}
+                components={{
+                  p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+                  ul: ({ children }) => <ul className="list-disc pl-5 mb-3 last:mb-0 space-y-1">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 last:mb-0 space-y-1">{children}</ol>,
+                  li: ({ children }) => <li>{children}</li>,
+                  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                  em: ({ children }) => <em className="italic">{children}</em>,
+                  h1: ({ children }) => <h1 className="font-bold text-lg mb-2 mt-3 first:mt-0">{children}</h1>,
+                  h2: ({ children }) => <h2 className="font-bold text-base mb-2 mt-3 first:mt-0">{children}</h2>,
+                  h3: ({ children }) => <h3 className="font-semibold text-sm mb-1 mt-2 first:mt-0">{children}</h3>,
+                  code: ({ children }) => (
+                    <code className="bg-gray-200 text-gray-900 px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+                  ),
+                  a: ({ href, children }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {prerequisiteText}
+              </ReactMarkdown>
             </div>
           </div>
 
@@ -95,8 +117,11 @@ export default function PrerequisiteText({
             <p className="text-sm text-gray-700">
               <strong>次のステップ:</strong>{' '}
               この前提知識を読んだ後、元の論文を読むことで、より深く内容を理解できます。
+              右下のチャットから質問もできます。
             </p>
           </div>
+
+          <ChatBot sessionId={sessionId} />
         </>
       )}
     </div>

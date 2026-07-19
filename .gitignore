@@ -45,3 +45,4 @@ backend/logs/
 
 # Claude Code
 .claude/
+CLAUDE.md
