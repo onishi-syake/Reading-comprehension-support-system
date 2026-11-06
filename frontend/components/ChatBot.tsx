@@ -51,10 +51,13 @@ export default function ChatBot({ sessionId }: ChatBotProps) {
         ...prev,
         { role: 'assistant', content: response.reply },
       ]);
-    } catch {
+    } catch (err: any) {
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: '申し訳ありません。回答の取得に失敗しました。' },
+        {
+          role: 'assistant',
+          content: err.response?.data?.detail || '申し訳ありません。回答の取得に失敗しました。',
+        },
       ]);
     } finally {
       setSending(false);

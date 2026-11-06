@@ -29,6 +29,7 @@ app.add_middleware(
 
 # グローバルセッションストレージ（本番環境ではRedisなど使用）
 SESSION_TTL = 86400  # 24時間（秒）
+SESSION_EXPIRED_MESSAGE = "セッションが切れました。お手数ですが、最初からやり直してください。"
 sessions: Dict[str, dict] = {}
 
 def cleanup_expired_sessions():
@@ -112,7 +113,7 @@ async def extract_concepts(data: SessionData):
     try:
         session = sessions.get(data.session_id)
         if not session:
-            raise HTTPException(status_code=404, detail="セッションが見つかりません")
+            raise HTTPException(status_code=404, detail=SESSION_EXPIRED_MESSAGE)
 
         estimator = KnowledgeEstimator()
         concepts_dict = await estimator.extract_main_concepts(session["pdf_content"])
@@ -126,6 +127,8 @@ async def extract_concepts(data: SessionData):
 
         return {"concepts": list(concepts_dict.keys())}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"概念抽出エラー: {str(e)}")
 
@@ -179,7 +182,7 @@ async def get_next_question(data: SessionData):
     try:
         session = sessions.get(data.session_id)
         if not session:
-            raise HTTPException(status_code=404, detail="セッションが見つかりません")
+            raise HTTPException(status_code=404, detail=SESSION_EXPIRED_MESSAGE)
 
         estimator = KnowledgeEstimator()
 
@@ -211,6 +214,8 @@ async def get_next_question(data: SessionData):
 
         return {"finished": False, "question": question}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"質問生成エラー: {str(e)}")
 
@@ -220,7 +225,7 @@ async def answer_concept(data: AnswerConceptData):
     try:
         session = sessions.get(data.session_id)
         if not session:
-            raise HTTPException(status_code=404, detail="セッションが見つかりません")
+            raise HTTPException(status_code=404, detail=SESSION_EXPIRED_MESSAGE)
 
         # ユーザーの知識を記録
         session["user_knowledge"].append({
@@ -238,6 +243,8 @@ async def answer_concept(data: AnswerConceptData):
 
         return {"message": "回答を記録しました"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"回答記録エラー: {str(e)}")
 
@@ -247,7 +254,7 @@ async def generate_prerequisite_text(data: SessionData):
     try:
         session = sessions.get(data.session_id)
         if not session:
-            raise HTTPException(status_code=404, detail="セッションが見つかりません")
+            raise HTTPException(status_code=404, detail=SESSION_EXPIRED_MESSAGE)
 
         generator = PrerequisiteGenerator()
         prerequisite_text = await generator.generate_text(
@@ -274,10 +281,14 @@ async def generate_prerequisite_text(data: SessionData):
 
         return {"prerequisite_text": prerequisite_text}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"前提文生成エラー: {str(e)}")
 
 CHAT_MAX_HISTORY = 20  # 直近10往復分
+# 他のモジュールと同じく、安全のため30万文字（約60kトークン）を上限とする
+CHAT_PAPER_MAX_CHARS = 300000
 
 @app.post("/chat")
 async def chat(data: ChatData):
@@ -285,7 +296,7 @@ async def chat(data: ChatData):
     try:
         session = sessions.get(data.session_id)
         if not session:
-            raise HTTPException(status_code=404, detail="セッションが見つかりません")
+            raise HTTPException(status_code=404, detail=SESSION_EXPIRED_MESSAGE)
 
         prerequisite_text = session.get("prerequisite_text", "")
         if not prerequisite_text:
@@ -304,7 +315,7 @@ async def chat(data: ChatData):
             "前提知識文や論文の範囲を大きく超える質問には、範囲外であることを伝えてください。\n\n"
             f"【前提知識文】\n{prerequisite_text}\n\n"
             f"【ユーザーが理解していない概念】\n{', '.join(unknown_concepts) if unknown_concepts else 'なし'}\n\n"
-            f"【論文本文（参考）】\n{session['pdf_content'][:3000]}"
+            f"【論文本文（参考）】\n{session['pdf_content'][:CHAT_PAPER_MAX_CHARS]}"
         )
 
         # 会話履歴を構築

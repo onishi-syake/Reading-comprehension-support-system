@@ -17,7 +17,7 @@ export interface ConceptQuestion {
 export interface SessionResponse {
   session_id: string;
   message: string;
-  method?: 'pdfplumber' | 'ocr';
+  method?: 'pypdfium2' | 'ocr';
 }
 
 export interface ConceptsResponse {

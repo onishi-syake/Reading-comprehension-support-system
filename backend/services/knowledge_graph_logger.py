@@ -59,6 +59,9 @@ class KnowledgeGraphLogger:
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(log_data, f, ensure_ascii=False, indent=2)
 
+        # コンテナ内のファイルは停止時に消えるため、標準出力にも1行のJSONで残す
+        print(json.dumps({"event": "knowledge_graph_saved", **log_data}, ensure_ascii=False), flush=True)
+
         self.logger.info(f"Knowledge graph saved: {filename}")
         return filepath
 

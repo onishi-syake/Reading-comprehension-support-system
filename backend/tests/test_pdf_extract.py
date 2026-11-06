@@ -6,46 +6,39 @@ pdf_processor.pyと同じ処理を再現し、LLMが受け取るテキストを�
     python tests/test_pdf_extract.py <PDFファイルパス>
 
 出力:
-    - 使用された抽出方法（pdfplumber or OCR）
+    - 使用された抽出方法（pypdfium2 or OCR）
     - LLMが受け取るテキスト（clean_text適用済み）
     - 抽出結果を extracted_output.txt に保存
 """
 
-import pdfplumber
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from services.pdf_processor import PDFProcessor
+from services.pdf_processor import DocumentProcessor
 
 
 def extract_like_pdf_processor(pdf_path: str) -> dict:
     """pdf_processor.pyのextract_textと同じ処理を再現"""
-    processor = PDFProcessor()
+    processor = DocumentProcessor()
 
     with open(pdf_path, "rb") as f:
         pdf_bytes = f.read()
 
-    # 1. pdfplumberでテキスト抽出を試行
-    extracted_text = ""
-    with pdfplumber.open(pdf_path) as pdf:
-        page_count = len(pdf.pages)
-        for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text
+    # 1. pypdfium2でテキスト抽出を試行
+    extracted_text, page_count = processor._extract_embedded_text(pdf_bytes)
 
     # 2. OCR判定
     if not processor._needs_ocr(extracted_text, page_count):
         return {
             "text": processor.clean_text(extracted_text),
-            "method": "pdfplumber",
+            "method": "pypdfium2",
             "raw_text": extracted_text,
             "page_count": page_count,
         }
 
     # 3. OCRにフォールバック
-    print("pdfplumberでのテキスト抽出が不十分なため、OCRを実行します...")
+    print("pypdfium2でのテキスト抽出が不十分なため、OCRを実行します...")
     ocr_text = processor._extract_with_ocr(pdf_bytes)
     return {
         "text": processor.clean_text(ocr_text),

@@ -1,6 +1,6 @@
-import pdfplumber
+import pypdfium2 as pdfium
 import pytesseract
-from pdf2image import convert_from_bytes
+from pdf2image import convert_from_bytes, pdfinfo_from_bytes
 from docx import Document
 from fastapi import UploadFile
 import io
@@ -42,24 +42,28 @@ class DocumentProcessor:
         """PDFからテキストを抽出"""
         try:
             content = await file.read()
-            pdf_file = io.BytesIO(content)
-
-            extracted_text = ""
-            with pdfplumber.open(pdf_file) as pdf:
-                page_count = len(pdf.pages)
-                for page in pdf.pages:
-                    text = page.extract_text()
-                    if text:
-                        extracted_text += text
+            extracted_text, page_count = self._extract_embedded_text(content)
 
             if not self._needs_ocr(extracted_text, page_count):
-                return {"text": self.clean_text(extracted_text), "method": "pdfplumber"}
+                return {"text": self.clean_text(extracted_text), "method": "pypdfium2"}
 
             ocr_text = self._extract_with_ocr(content)
             return {"text": self.clean_text(ocr_text), "method": "ocr"}
 
         except Exception as e:
             raise Exception(f"PDFテキスト抽出エラー: {str(e)}")
+
+    def _extract_embedded_text(self, pdf_bytes: bytes) -> tuple[str, int]:
+        """PDFに埋め込まれた文字情報を取得し、本文とページ数を返す"""
+        pdf = pdfium.PdfDocument(pdf_bytes)
+        try:
+            page_count = len(pdf)
+            pages = [pdf[i].get_textpage().get_text_bounded() for i in range(page_count)]
+        finally:
+            pdf.close()
+
+        # PDFiumは行末のハイフン分割を \x02 で示すので、取り除いて語をつなぐ
+        return "\n".join(pages).replace("\x02", ""), page_count
 
     async def _extract_from_docx(self, file: UploadFile) -> dict:
         """Wordファイルからテキストを抽出（段落・テーブル両方）"""
@@ -124,9 +128,13 @@ class DocumentProcessor:
 
     def _extract_with_ocr(self, pdf_bytes: bytes) -> str:
         """OCRでテキスト抽出"""
-        images = convert_from_bytes(pdf_bytes, dpi=300)
+        page_count = pdfinfo_from_bytes(pdf_bytes)["Pages"]
         extracted_text = ""
-        for image in images:
+        # メモリ使用量を抑えるため、1ページずつ画像化して認識する
+        for page_number in range(1, page_count + 1):
+            image = convert_from_bytes(
+                pdf_bytes, dpi=300, first_page=page_number, last_page=page_number
+            )[0]
             text = pytesseract.image_to_string(image, lang='eng+jpn')
             if text:
                 extracted_text += text
@@ -134,7 +142,7 @@ class DocumentProcessor:
 
     def clean_text(self, text: str) -> str:
         """
-        抽出したテキストをクリーニング（改行・空白を全て削除）
+        抽出したテキストをクリーニング（欧文の語の区切りを除いて改行・空白を削除）
 
         Args:
             text: 元のテキスト
@@ -144,12 +152,12 @@ class DocumentProcessor:
         """
         import re
 
-        # 改行を全て削除
-        text = text.replace('\r\n', '')
-        text = text.replace('\n', '')
-        text = text.replace('\r', '')
+        latin = r'[!-~\u00C0-\u024F]'
 
-        # 空白を全て削除
-        text = re.sub(r'[\s\u3000]+', '', text)
+        # 欧文の文字に挟まれた改行・空白は、語の区切りとして空白1つにする
+        text = re.sub(rf'(?<={latin})\s+(?={latin})', ' ', text)
+
+        # それ以外の改行・空白は全て削除
+        text = re.sub(rf'(?<!{latin})\s+|\s+(?!{latin})', '', text)
 
         return text
