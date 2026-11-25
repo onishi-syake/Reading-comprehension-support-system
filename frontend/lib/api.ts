@@ -37,6 +37,25 @@ export interface ChatResponse {
   reply: string;
 }
 
+// 比較手法：simplify（平易化）、summarize（要約）
+export type ComparisonTask = 'simplify' | 'summarize';
+
+export interface ComparisonTextResponse {
+  text: string;
+}
+
+// 比較手法の文章生成
+export const generateComparisonText = async (
+  sessionId: string,
+  task: ComparisonTask
+): Promise<ComparisonTextResponse> => {
+  const response = await api.post('/generate-comparison-text', {
+    session_id: sessionId,
+    task,
+  });
+  return response.data;
+};
+
 // ファイルアップロード（PDF / Word）
 export const uploadFile = async (file: File): Promise<SessionResponse> => {
   const formData = new FormData();

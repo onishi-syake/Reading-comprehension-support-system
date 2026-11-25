@@ -6,9 +6,15 @@ import { uploadFile, extractConcepts } from '@/lib/api';
 interface PDFUploadProps {
   onUploadComplete: (sessionId: string) => void;
   onOcrNotice?: (message: string) => void;
+  // 平易化・要約のページでは概念抽出が不要なので false にする（省略時は提案手法と同じく抽出する）
+  extractConceptsAfterUpload?: boolean;
 }
 
-export default function PDFUpload({ onUploadComplete, onOcrNotice }: PDFUploadProps) {
+export default function PDFUpload({
+  onUploadComplete,
+  onOcrNotice,
+  extractConceptsAfterUpload = true,
+}: PDFUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
@@ -52,7 +58,9 @@ export default function PDFUpload({ onUploadComplete, onOcrNotice }: PDFUploadPr
       }
 
       // 概念抽出
-      await extractConcepts(sessionId);
+      if (extractConceptsAfterUpload) {
+        await extractConcepts(sessionId);
+      }
 
       // 次のステップへ
       onUploadComplete(sessionId);

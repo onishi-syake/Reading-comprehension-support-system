@@ -12,6 +12,7 @@ from services.pdf_processor import DocumentProcessor
 from services.knowledge_estimator import KnowledgeEstimator
 from services.prerequisite_generator import PrerequisiteGenerator
 from services.knowledge_graph_logger import KnowledgeGraphLogger
+from services.comparison_generator import ComparisonGenerator
 
 load_dotenv()
 
@@ -53,6 +54,10 @@ class AnswerConceptData(BaseModel):
 class ChatData(BaseModel):
     session_id: str
     message: str
+
+class ComparisonData(BaseModel):
+    session_id: str
+    task: str  # "simplify"（平易化）または "summarize"（要約）
 
 @app.get("/")
 async def root():
@@ -285,6 +290,28 @@ async def generate_prerequisite_text(data: SessionData):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"前提文生成エラー: {str(e)}")
+
+@app.post("/generate-comparison-text")
+async def generate_comparison_text(data: ComparisonData):
+    """比較手法（平易化・要約）の文章を生成"""
+    try:
+        session = sessions.get(data.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=SESSION_EXPIRED_MESSAGE)
+
+        if data.task not in ("simplify", "summarize"):
+            raise HTTPException(status_code=400, detail=f"未対応の処理です: {data.task}")
+
+        generator = ComparisonGenerator()
+        text = await generator.generate_text(data.task, session["pdf_content"])
+        print(f"比較手法の生成 (task={data.task}): 入力 {len(session['pdf_content'])}文字 → 出力 {len(text)}文字")
+
+        return {"text": text}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成エラー: {str(e)}")
 
 CHAT_MAX_HISTORY = 20  # 直近10往復分
 # 他のモジュールと同じく、安全のため30万文字（約60kトークン）を上限とする
